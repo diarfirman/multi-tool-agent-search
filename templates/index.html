@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Riwayat Pembelian dan Rute Penerbangan</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        /* Gaya dasar untuk body */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f9;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* Kontainer utama chat */
+        .chat-container {
+            width: 90%;
+            max-width: 650px;
+            height: 85vh;
+            max-height: 700px;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+        }
+
+        /* Judul chat */
+        .chat-title {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            flex-shrink: 0;
+        }
+
+        /* Area log percakapan */
+        .chat-log {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            padding-right: 10px;
+            border-top: 1px solid #eee;
+            border-bottom: 1px solid #eee;
+            padding-top: 10px;
+            padding-bottom: 10px;
+        }
+
+        /* Gaya umum untuk setiap pesan */
+        .message {
+            margin: 12px 0;
+            padding: 12px 18px;
+            border-radius: 18px;
+            line-height: 1.6;
+            max-width: 85%; /* Sedikit lebih lebar */
+            word-wrap: break-word;
+            position: relative;
+            font-size: 0.95em; /* Sedikit kecilkan font pesan */
+        }
+
+        /* Pesan dari pengguna */
+        .user-message {
+            background-color: #007bff;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+            text-align: left;
+        }
+
+        /* Pesan dari AI */
+        .ai-message {
+            background-color: #e9ecef;
+            color: #333;
+            margin-right: auto;
+            border-bottom-left-radius: 5px;
+            text-align: left;
+            /* PENTING: Mempertahankan spasi dan baris baru dari output agen */
+            white-space: pre-wrap;
+        }
+
+        /* Formulir input pesan */
+        .chat-form {
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
+            margin-top: auto;
+            padding-top: 15px;
+        }
+
+        /* Input teks */
+        .chat-form input[type="text"] {
+            flex-grow: 1;
+            padding: 12px 15px;
+            border-radius: 20px;
+            border: 1px solid #ccc;
+            font-size: 1em;
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+        .chat-form input[type="text"]:focus {
+            border-color: #007bff;
+        }
+
+        /* Tombol kirim */
+        .chat-form button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 0 20px;
+            height: 44px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            transition: background-color 0.2s ease;
+        }
+        .chat-form button:hover {
+            background-color: #0056b3;
+        }
+
+        /* Styling Scrollbar (opsional, Webkit) */
+        .chat-log::-webkit-scrollbar { width: 6px; }
+        .chat-log::-webkit-scrollbar-track { background: #f4f7f9; border-radius: 3px; }
+        .chat-log::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+        .chat-log::-webkit-scrollbar-thumb:hover { background: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h2 class="chat-title">Chat Riwayat Pembelian dan Rute Penerbangan</h2>
+
+        <div class="chat-log" id="chatLogContainer">
+            {% for message in chat_history %}
+                {% if message.type == 'user' %}
+                    <div class="message user-message">
+                        {{ message.text }}
+                    </div>
+                {% elif message.type == 'ai' %}
+                    <div class="message ai-message">
+                        {{ message.text }}
+                    </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+
+        <form method="post" class="chat-form">
+            <input type="text" name="question" placeholder="Ketik pesan Anda..." required autocomplete="off" autofocus>
+            <button type="submit">Kirim</button>
+        </form>
+    </div>
+
+    <script>
+        // Script untuk otomatis scroll ke bawah
+        const chatLog = document.getElementById('chatLogContainer');
+        function scrollToBottom() {
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }
+        // Panggil saat halaman dimuat
+        scrollToBottom();
+    </script>
+</body>
+</html>

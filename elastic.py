@@ -1,10 +1,11 @@
 import os
 from dotenv import load_dotenv
-from elasticsearch import Elasticsearch, NotFoundError
+from elasticsearch import Elasticsearch, NotFoundError, ConnectionError
+from typing import Optional # Pastikan Optional diimpor
 
 load_dotenv()
 
-# Inisialisasi koneksi Elasticsearch (sama seperti sebelumnya)
+# Inisialisasi koneksi Elasticsearch
 es_host = os.getenv("ELASTICSEARCH_HOST")
 es_user = os.getenv("ES_USER")
 es_password = os.getenv("ES_PASSWORD")
@@ -16,243 +17,265 @@ try:
     es = Elasticsearch(
         hosts=[es_host],
         basic_auth=(es_user, es_password) if es_user and es_password else None,
+        # Sesuaikan verify_certs jika menggunakan sertifikat self-signed atau tanpa SSL
         verify_certs=True,
         request_timeout=60
     )
+    # Cek koneksi saat inisialisasi
     if not es.ping():
         raise ConnectionError("Failed to connect to Elasticsearch.")
+    print("Successfully connected to Elasticsearch.") # Konfirmasi koneksi berhasil
+except ConnectionError as ce:
+     # Menangkap error koneksi spesifik
+     print(f"Elasticsearch connection error: {ce}")
+     raise ConnectionError(f"Error connecting to Elasticsearch: {ce}") from ce
 except Exception as e:
+    # Menangkap error umum lainnya saat inisialisasi
+    print(f"An unexpected error occurred during Elasticsearch initialization: {e}")
     raise ConnectionError(f"Error connecting to Elasticsearch: {e}") from e
 
 
-# --- Fungsi Dimodifikasi: Tanpa Nested Query ---
-def get_order_summary(query_string: str, day: str = None) -> str:
+# --- Fungsi Order Summary (Parameter Spesifik, Tanpa Nested Query) ---
+def get_order_summary(
+    customer_name: Optional[str] = None,
+    product_name: Optional[str] = None,
+    category: Optional[str] = None,
+    day: Optional[str] = None  # Tetap string ('Senin', 'Selasa', dll.)
+) -> str:
     """
-    Mengambil ringkasan pesanan dari Elasticsearch menggunakan multi-match query
-    langsung pada nama pelanggan, nama produk, dan kategori (TANPA nested query),
-    dengan filter hari opsional.
+    Mengambil ringkasan pesanan dari Elasticsearch berdasarkan kriteria spesifik
+    seperti nama pelanggan, nama produk, kategori produk, dan/atau hari.
 
     Args:
-        query_string (str): Teks pencarian umum (nama, produk, kategori).
-        day (str, optional): Hari dalam seminggu untuk filter tambahan. Defaults to None.
+        customer_name (Optional[str]): Nama lengkap pelanggan (case-sensitive).
+        product_name (Optional[str]): Nama produk yang dicari dalam pesanan.
+        category (Optional[str]): Kategori produk yang dicari dalam pesanan.
+        day (Optional[str]): Nama hari dalam seminggu (misal: 'Jumat', 'Monday').
 
     Returns:
         str: String ringkasan pesanan yang diformat atau pesan 'tidak ditemukan'.
     """
-    if not query_string:
-        return "Mohon berikan kata kunci pencarian (nama pelanggan, produk, atau kategori)."
+    # Memastikan setidaknya ada satu kriteria
+    if not any([customer_name, product_name, category, day]):
+        return "Mohon berikan setidaknya satu kriteria pencarian (nama pelanggan, produk, kategori, atau hari)."
 
+    # Filter di level utama
+    top_level_filters = []
+    criteria_list = [] # Untuk deskripsi di output
+
+    if customer_name:
+        # Menggunakan term untuk kecocokan eksak (case-sensitive) pada field keyword
+        top_level_filters.append({"term": {"customer_full_name.keyword": customer_name}})
+        criteria_list.append(f"pelanggan '{customer_name}'")
+    if day:
+        # Pastikan nilai 'day' cocok dengan data di field 'day_of_week'
+        top_level_filters.append({"term": {"day_of_week": day}})
+        criteria_list.append(f"pada hari '{day}'")
+    if product_name:
+        # Menggunakan match untuk pencarian teks pada field produk
+        top_level_filters.append({"match": {"products.product_name": product_name}})
+        criteria_list.append(f"produk '{product_name}'")
+    if category:
+        # Menggunakan term untuk kecocokan eksak pada field kategori (asumsi keyword)
+        top_level_filters.append({"term": {"products.category": category}})
+        criteria_list.append(f"kategori '{category}'")
+
+    if not top_level_filters:
+         # Seharusnya tidak terjadi karena cek di awal, tapi sebagai fallback
+         return "Tidak ada kriteria pencarian valid yang bisa digunakan."
+
+    # Bangun query Elasticsearch akhir
     query = {
-        "size": 50,
+        "size": 50, # Jumlah maksimal pesanan yang ditampilkan
         "query": {
             "bool": {
-                "must": [
-                    # --- Multi-Match Langsung (Tanpa Nested) ---
-                    {
-                        "multi_match": {
-                            "query": query_string,
-                            "fields": [
-                                "customer_full_name^2", # Beri boost jika cocok nama pelanggan
-                                "products.product_name",
-                                "products.category"
-                                # Tambahkan field lain jika perlu, misal "products.description"
-                            ],
-                            "type": "best_fields" # Atau tipe lain yang sesuai
-                        }
-                    }
-                    # --- Akhir Multi-Match Langsung ---
-                ],
-                "filter": [] # Filter context untuk hari
+                "filter": top_level_filters # Menggabungkan semua filter
             }
-        }
+        },
+         "sort": [
+             # Urutkan berdasarkan tanggal pesanan (pastikan field 'order_date' ada)
+            {"order_date": {"order": "desc"}}
+        ]
     }
-
-    # Tambahkan filter hari jika disediakan
-    if day:
-        query["query"]["bool"]["filter"].append(
-            {"term": {"day_of_week": day}}
-        )
-
-    # Hapus list 'filter' jika kosong
-    if not query["query"]["bool"]["filter"]:
-        del query["query"]["bool"]["filter"]
 
     # Lakukan pencarian
     try:
-        # print(f"Elasticsearch Query (Workaround): {query}") # Uncomment untuk debug
+        # print(f"Debug: Elasticsearch Order Query: {query}") # Aktifkan untuk debug
         res = es.search(index="kibana_sample_data_ecommerce", body=query)
     except NotFoundError:
         return "Error: Index 'kibana_sample_data_ecommerce' tidak ditemukan."
     except ConnectionError as e:
-         print(f"Connection error during search: {e}")
-         return "Maaf, terjadi masalah koneksi saat mengambil data pesanan."
-    # Tangani error spesifik dari multi_match jika field tidak ada/salah mapping
+        # Error koneksi saat pencarian
+        print(f"Connection error during order search: {e}")
+        return "Maaf, terjadi masalah koneksi saat mengambil data pesanan."
     except Exception as e:
-        # Periksa apakah ini error terkait field tidak ditemukan di multi_match
-        if 'No keyword/text fields found' in str(e):
-             print(f"Mapping Error: Pastikan field di multi_match ada dan bertipe teks/keyword. Error: {e}")
-             return "Maaf, terjadi kesalahan konfigurasi pencarian. Field tidak ditemukan."
-        print(f"Error searching Elasticsearch: {e}")
+        # Menangkap error lain saat pencarian (misal: mapping error, query error)
+        print(f"Error searching orders in Elasticsearch: {e}")
         print(f"Query causing error: {query}")
-        return "Maaf, terjadi kesalahan tak terduga saat mengambil data pesanan."
+        # Berikan pesan error yang lebih spesifik jika memungkinkan
+        error_type = getattr(e, 'error', 'unknown')
+        error_reason = getattr(e, 'info', {}).get('error', {}).get('root_cause', [{}])[0].get('reason', str(e))
+        return f"Maaf, terjadi kesalahan ({error_type}) saat mengambil data pesanan: {error_reason}"
 
     orders = res['hits']['hits']
+    criteria_str = " dan ".join(criteria_list) if criteria_list else "yang diminta"
 
     if not orders:
-        return f"Tidak ditemukan pesanan yang cocok dengan '{query_string}'" + (f" pada hari '{day}'." if day else ".")
+        return f"Tidak ditemukan pesanan {criteria_str}."
 
-    # --- Pemformatan Output (Sama seperti sebelumnya) ---
+    # --- Pemformatan Output ---
     summary_lines = []
     order_count = 1
-
-    criteria_str = f"yang cocok dengan '{query_string}'" + (f" pada hari {day}" if day else "")
     summary_lines.append(f"Berikut ini adalah ringkasan pembelian {criteria_str}:")
 
     for order in orders:
         o = order['_source']
-        items = [
-            f"  * {p.get('quantity', '?')}x {p.get('product_name', 'N/A')} (EUR {p.get('price', 'N/A')})"
-            for p in o.get('products', [])
-        ]
-        items_str = "\n".join(items)
+        # Ambil tanggal dari field 'order_date', potong waktunya
+        order_info_date = "N/A"
+        if o.get('order_date'):
+            order_info_date = o.get('order_date')[:10] # Ambil YYYY-MM-DD
+        elif o.get('day_of_week'):
+            order_info_date = o.get('day_of_week') # Fallback ke hari jika tanggal tidak ada
+
+        # Format detail produk dalam pesanan
+        items = []
+        total_order_value = 0
+        for p in o.get('products', []):
+            price = p.get('base_price', 0) # Gunakan base_price atau price
+            quantity = p.get('quantity', 1)
+            items.append(
+                f"  * {quantity}x {p.get('product_name', 'N/A')} ({p.get('category', 'N/A')}) - EUR {price:.2f}"
+            )
+            total_order_value += price * quantity
+
+        items_str = "\n".join(items) if items else "  (Detail produk tidak tersedia)"
 
         summary_lines.append(
             f"{order_count}. Order #{o.get('order_id', 'N/A')} oleh {o.get('customer_full_name', 'N/A')} "
-            f"pada {o.get('day_of_week', 'N/A')}:\n{items_str}"
+            f"pada {order_info_date} (Total: EUR {o.get('total_unique_products', '?')} produk senilai EUR {total_order_value:.2f}):\n{items_str}"
         )
         order_count += 1
 
     return "\n".join(summary_lines)
 
-# --- FUNGSI BARU: Untuk Mengambil Informasi Penerbangan ---
-def get_flight_info(query_string: str, day_of_week: int = None) -> str:
+
+# --- Fungsi Flight Info (Parameter Spesifik) ---
+def get_flight_info(
+    origin_city: Optional[str] = None,
+    destination_city: Optional[str] = None,
+    carrier: Optional[str] = None,
+    flight_num: Optional[str] = None,
+    day_of_week: Optional[int] = None # Angka 0-6
+) -> str:
     """
-    Mengambil informasi penerbangan dari Elasticsearch berdasarkan kata kunci
-    (kota asal/tujuan, bandara, maskapai, nomor penerbangan) dengan filter hari opsional.
+    Mengambil informasi penerbangan dari Elasticsearch berdasarkan kriteria spesifik.
 
     Args:
-        query_string (str): Teks pencarian umum terkait penerbangan.
-        day_of_week (int, optional): Angka hari dalam seminggu (0=Senin, ..., 4=Jumat, ..., 6=Minggu)
-                                     berdasarkan data Elasticsearch. Defaults to None.
+        origin_city (Optional[str]): Nama kota asal.
+        destination_city (Optional[str]): Nama kota tujuan.
+        carrier (Optional[str]): Nama maskapai penerbangan.
+        flight_num (Optional[str]): Nomor penerbangan.
+        day_of_week (Optional[int]): Angka hari dalam seminggu (0=Senin, ..., 6=Minggu).
 
     Returns:
-        str: String ringkasan informasi penerbangan yang diformat atau pesan 'tidak ditemukan'.
+        str: String ringkasan informasi penerbangan atau pesan 'tidak ditemukan'.
     """
-    if not query_string:
-        return "Mohon berikan kata kunci pencarian penerbangan (kota, bandara, maskapai, atau nomor penerbangan)."
+    # Memastikan setidaknya ada satu kriteria
+    if not any([origin_city, destination_city, carrier, flight_num, day_of_week is not None]):
+        return "Mohon berikan setidaknya satu kriteria pencarian penerbangan (kota asal/tujuan, maskapai, nomor penerbangan, atau hari)."
 
-    # Field yang relevan untuk pencarian multi_match
-    search_fields = [
-        "OriginCityName^2",   # Beri bobot lebih pada nama kota
-        "DestCityName^2",
-        "Origin",             # Nama bandara asal
-        "Dest",               # Nama bandara tujuan
-        "Carrier",            # Nama maskapai
-        "FlightNum^3"         # Beri bobot paling tinggi pada nomor penerbangan
-    ]
+    filters = [] # List untuk filter Elasticsearch
+    criteria_list = [] # Untuk deskripsi di output
 
+    # Tambahkan filter berdasarkan parameter yang ada
+    if origin_city:
+        filters.append({"term": {"OriginCityName": origin_city}})
+        criteria_list.append(f"asal '{origin_city}'")
+    if destination_city:
+        filters.append({"term": {"DestCityName": destination_city}})
+        criteria_list.append(f"tujuan '{destination_city}'")
+    if carrier:
+        filters.append({"term": {"Carrier": carrier}})
+        criteria_list.append(f"maskapai '{carrier}'")
+    if flight_num:
+        filters.append({"term": {"FlightNum": flight_num}}) # Asumsi keyword
+        criteria_list.append(f"nomor penerbangan '{flight_num}'")
+    if day_of_week is not None:
+        if 0 <= day_of_week <= 6:
+            filters.append({"term": {"dayOfWeek": day_of_week}})
+            days = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+            try:
+                criteria_list.append(f"pada hari {days[day_of_week]}")
+            except IndexError:
+                criteria_list.append(f"pada hari ke-{day_of_week}")
+        else:
+            print(f"Peringatan: Nilai day_of_week ({day_of_week}) tidak valid. Filter hari diabaikan.")
+
+    if not filters:
+         return "Tidak ada kriteria pencarian valid yang bisa digunakan."
+
+    # Bangun query Elasticsearch
     query = {
-        "size": 10,  # Batasi jumlah hasil agar tidak terlalu panjang
+        "size": 10, # Batasi jumlah hasil
         "query": {
             "bool": {
-                "must": [
-                    {
-                        "multi_match": {
-                            "query": query_string,
-                            "fields": search_fields,
-                            "type": "best_fields" # Cari kecocokan terbaik di salah satu field
-                        }
-                    }
-                ],
-                "filter": [] # Filter ditambahkan di bawah jika ada day_of_week
+                "filter": filters
             }
         },
-        # Bisa ditambahkan sorting jika perlu, misal berdasarkan waktu
-        # "sort": [
-        #     {"timestamp": {"order": "desc"}}
-        # ]
+        "sort": [
+             {"timestamp": {"order": "desc"}} # Urutkan penerbangan terbaru dulu
+         ]
     }
 
-    # Tambahkan filter hari jika parameter day_of_week diberikan dan valid
-    if day_of_week is not None:
-        # Pastikan nilai valid (Elasticsearch biasanya 0-6 untuk dayOfWeek)
-        if 0 <= day_of_week <= 6:
-            query["query"]["bool"]["filter"].append(
-                {"term": {"dayOfWeek": day_of_week}}
-            )
-        else:
-            # Jika tidak valid, bisa diabaikan atau beri pesan peringatan
-            print(f"Peringatan: Nilai day_of_week ({day_of_week}) tidak valid. Filter hari diabaikan.")
-            # Atau kembalikan pesan error: return "Error: Nilai hari tidak valid (harus 0-6)."
-
-    # Hapus list 'filter' jika kosong (tidak ada filter hari)
-    if not query["query"]["bool"]["filter"]:
-        del query["query"]["bool"]["filter"]
-
-    # Lakukan pencarian ke index penerbangan
+    # Lakukan pencarian
     try:
-        # print(f"Debug: Elasticsearch Flight Query: {query}") # Aktifkan untuk debugging query
-        res = es.search(index="kibana_sample_data_flights", body=query) # Target index penerbangan
+        # print(f"Debug: Elasticsearch Flight Query: {query}") # Aktifkan untuk debug
+        res = es.search(index="kibana_sample_data_flights", body=query)
     except NotFoundError:
-        return "Error: Index 'kibana_sample_data_flights' tidak ditemukan di Elasticsearch."
+        return "Error: Index 'kibana_sample_data_flights' tidak ditemukan."
     except ConnectionError as e:
          print(f"Connection error during flight search: {e}")
          return "Maaf, terjadi masalah koneksi saat mengambil data penerbangan."
-    # Tangani error spesifik jika field di multi_match tidak ada/salah mapping
     except Exception as e:
-        if 'No keyword/text fields found' in str(e):
-             print(f"Mapping Error in flight search: Pastikan field di '{search_fields}' ada dan bertipe text/keyword. Error: {e}")
-             return "Maaf, terjadi kesalahan konfigurasi pencarian penerbangan (field tidak ditemukan)."
         print(f"Error searching flights in Elasticsearch: {e}")
         print(f"Query causing error: {query}")
-        return "Maaf, terjadi kesalahan tak terduga saat mengambil data penerbangan."
+        error_type = getattr(e, 'error', 'unknown')
+        error_reason = getattr(e, 'info', {}).get('error', {}).get('root_cause', [{}])[0].get('reason', str(e))
+        return f"Maaf, terjadi kesalahan ({error_type}) saat mengambil data penerbangan: {error_reason}"
 
     flights = res['hits']['hits']
+    criteria_str = " dan ".join(criteria_list) if criteria_list else "yang diminta"
 
-    # Jika tidak ada hasil
     if not flights:
-        day_str = f" pada hari ke-{day_of_week}" if day_of_week is not None and 0 <= day_of_week <= 6 else ""
-        return f"Tidak ditemukan penerbangan yang cocok dengan '{query_string}'{day_str}."
+        return f"Tidak ditemukan penerbangan {criteria_str}."
 
     # --- Pemformatan Output ---
     summary_lines = []
     flight_count = 1
-    criteria_str = f"yang cocok dengan '{query_string}'" + (f" pada hari ke-{day_of_week}" if day_of_week is not None and 0 <= day_of_week <= 6 else "")
     summary_lines.append(f"Berikut adalah informasi penerbangan {criteria_str}:")
-    summary_lines.append("-" * 30) # Garis pemisah
+    summary_lines.append("-" * 30)
 
     for flight in flights:
         f = flight['_source']
-        # Format timestamp agar lebih mudah dibaca (opsional)
         timestamp_str = f.get('timestamp', 'N/A').replace('T', ' ') if f.get('timestamp') else 'N/A'
-
-        # Tentukan status penerbangan
         status = "Tepat Waktu"
-        if f.get('Cancelled', False):
-            status = "Dibatalkan"
-        elif f.get('FlightDelay', False):
-            status = f"Delay ({f.get('FlightDelayType', 'Jenis tidak diketahui')})"
+        if f.get('Cancelled', False): status = "Dibatalkan"
+        elif f.get('FlightDelay', False): status = f"Delay ({f.get('FlightDelayType', 'N/A')})"
 
         details = [
-            f"  Nomor: {f.get('FlightNum', 'N/A')}",
-            f"  Maskapai: {f.get('Carrier', 'N/A')}",
-            f"  Asal: {f.get('OriginCityName', 'N/A')} ({f.get('OriginAirportID', 'N/A')}) - {f.get('Origin', 'N/A')}",
-            f"  Tujuan: {f.get('DestCityName', 'N/A')} ({f.get('DestAirportID', 'N/A')}) - {f.get('Dest', 'N/A')}",
-            f"  Waktu Keberangkatan (UTC): {timestamp_str}",
-            # Format durasi dan jarak agar lebih rapi
-            f"  Durasi: {f.get('FlightTimeMin', 0):.1f} menit",
-            f"  Jarak: {f.get('DistanceKilometers', 0):.1f} km",
-            # Format harga tiket
-            f"  Harga Tiket Rata-rata: ${f.get('AvgTicketPrice', 0):.2f}",
-            f"  Status: {status}",
-            # Tambahkan info cuaca jika relevan
-            # f"  Cuaca Asal: {f.get('OriginWeather', 'N/A')}",
-            # f"  Cuaca Tujuan: {f.get('DestWeather', 'N/A')}",
+             f"  Nomor: {f.get('FlightNum', 'N/A')}",
+             f"  Maskapai: {f.get('Carrier', 'N/A')}",
+             f"  Asal: {f.get('OriginCityName', 'N/A')} ({f.get('OriginAirportID', 'N/A')}) - {f.get('Origin', 'N/A')}",
+             f"  Tujuan: {f.get('DestCityName', 'N/A')} ({f.get('DestAirportID', 'N/A')}) - {f.get('Dest', 'N/A')}",
+             f"  Waktu Keberangkatan (UTC): {timestamp_str}",
+             f"  Durasi: {f.get('FlightTimeMin', 0):.1f} menit",
+             f"  Jarak: {f.get('DistanceKilometers', 0):.1f} km",
+             f"  Harga Tiket Rata-rata: ${f.get('AvgTicketPrice', 0):.2f}",
+             f"  Status: {status}",
         ]
-        # Judul untuk setiap penerbangan
         summary_lines.append(f"{flight_count}. Penerbangan {f.get('FlightNum', 'N/A')}:")
         summary_lines.extend(details)
-        summary_lines.append("-" * 30) # Garis pemisah antar hasil
+        summary_lines.append("-" * 30)
         flight_count += 1
 
     return "\n".join(summary_lines)

@@ -8,9 +8,30 @@ from langchain.agents import initialize_agent, Tool, AgentExecutor
 from langchain.agents.agent_types import AgentType
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import MessagesPlaceholder
+from langchain.tools import StructuredTool
+from pydantic.v1 import BaseModel, Field
+from typing import Optional
 from elastic import get_order_summary, get_flight_info
 
 load_dotenv()
+
+# --- Definisikan Skema Argumen untuk Order ---
+class OrderSearchArgs(BaseModel):
+    """Argumen input untuk pencarian ringkasan pesanan."""
+    customer_name: Optional[str] = Field(None, description="Nama lengkap pelanggan. Contoh: Mary Doe, John Smith")
+    product_name: Optional[str] = Field(None, description="Nama produk spesifik yang dicari dalam pesanan. Contoh: Men's Joggers, Women's Leggings. Jika disebutkan dalam bahasa indonesia ubah ke bahasa inggris")
+    category: Optional[str] = Field(None, description="Kategori produk yang dicari dalam pesanan. Contoh: Men's Clothing, Women's Shoes")
+    day: Optional[str] = Field(None, description="Hari pemesanan dalam bentuk nama hari (Contoh: Senin, Selasa, Jumat) dan translate nama hari tersebut ke dalam bahasa inggris")
+
+# --- Definisikan Skema Argumen untuk Flight (dari langkah sebelumnya) ---
+class FlightSearchArgs(BaseModel):
+    """Argumen input untuk pencarian penerbangan."""
+    origin_city: Optional[str] = Field(None, description="Kota keberangkatan penerbangan. Contoh: Chicago, Jakarta")
+    destination_city: Optional[str] = Field(None, description="Kota tujuan penerbangan. Contoh: Copenhagen, Surabaya")
+    carrier: Optional[str] = Field(None, description="Nama maskapai penerbangan. Contoh: ES-Air, JetBeats")
+    flight_num: Optional[str] = Field(None, description="Nomor penerbangan spesifik. Contoh: 7WVTTE9, GA123")
+    day_of_week: Optional[int] = Field(None, description="Hari keberangkatan dalam bentuk angka (0=Senin, 1=Selasa, ..., 6=Minggu)")
+
 
 # --- Inisialisasi LLM Menggunakan OpenAI---
 # Mengambil konfigurasi dari variabel lingkungan yang sudah diatur
@@ -53,34 +74,23 @@ except Exception as e:
 
 
 # --- Definisi Tools ---
-# !! BUAT LIST TOOLS YANG BERISI KEDUA TOOL !!
+# --- Gunakan StructuredTool untuk KEDUA tool ---
 tools = [
-    # !! TOOL UNTUK DATA PEMBELIAN !!
-    Tool(
+    StructuredTool.from_function(
+        func=get_order_summary, # Fungsi order yang sudah dimodifikasi
         name="GetOrderSummary",
-        func=get_order_summary,
-        # Deskripsi diperjelas agar tidak tumpang tindih
-        description=(
-            "Gunakan tool ini HANYA untuk mencari informasi atau ringkasan terkait PESANAN (order), PEMBELIAN PRODUK, atau RIWAYAT BELANJA. "
-            "Tool ini mencari berdasarkan kata kunci seperti nama pelanggan, nama produk, atau kategori produk. "
-            "Bisa juga difilter berdasarkan HARI jika disebutkan (parameter 'day', contoh: 'Senin', 'Selasa'). "
-            "Parameter utama adalah 'query_string'. "
-            "JANGAN gunakan tool ini untuk informasi PENERBANGAN (flights)." # <--- Penegasan
-        )
+        description=( # Deskripsi umum tool
+            "Mencari dan memberikan ringkasan pesanan (order summary) e-commerce berdasarkan kriteria spesifik. Gunakan tool ini jika pengguna bertanya tentang riwayat pembelian, detail pesanan pelanggan, atau produk/kategori yang dibeli pada hari tertentu."
+        ),
+        args_schema=OrderSearchArgs # Skema Pydantic untuk argumen order
     ),
-    # !! TOOL UNTUK DATA PENERBANGAN !!
-    Tool(
+    StructuredTool.from_function(
+        func=get_flight_info, # Fungsi flight yang sudah dimodifikasi
         name="GetFlightInfo",
-        func=get_flight_info, # <--- Kaitkan ke fungsi baru get_flight_info
-        # Deskripsi yang jelas dan spesifik untuk penerbangan
-        description=(
-            "Gunakan tool ini HANYA untuk mencari informasi tentang PENERBANGAN (flights). "
-            "Tool ini mencari berdasarkan kata kunci seperti kota asal (origin city), kota tujuan (destination city), "
-            "nama bandara (airport name), maskapai penerbangan (carrier/airline), atau nomor penerbangan (flight number). "
-            "Bisa juga difilter berdasarkan HARI DALAM SEMINGGU jika disebutkan (parameter 'day_of_week', angka 0 untuk Senin, 1 untuk Selasa, ..., 6 untuk Minggu). "
-            "Parameter utama adalah 'query_string'. "
-            "JANGAN gunakan tool ini untuk informasi PESANAN PRODUK atau RIWAYAT BELANJA." # <--- Penegasan
-        )
+        description=( # Deskripsi umum tool
+             "Mencari informasi penerbangan (flights) berdasarkan satu atau lebih kriteria spesifik seperti kota asal, kota tujuan, maskapai, nomor penerbangan, atau hari keberangkatan (sebagai angka 0-6)."
+        ),
+        args_schema=FlightSearchArgs # Skema Pydantic untuk argumen flight
     )
 ]
 

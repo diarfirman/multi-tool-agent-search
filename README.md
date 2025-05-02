@@ -18,9 +18,9 @@ Aplikasi ini adalah sebuah chatbot berbasis web yang menggunakan Large Language 
 * **Backend:** Python 3.x
 * **Web Framework:** Flask
 * **Orkestrasi AI:** Langchain
-* **LLM Provider:** OpenAI atau Azure OpenAI Service (dapat dikonfigurasi)
+* **LLM Provider:** OpenAI atau Azure OpenAI Service (dapat dikonfigurasi sesuai kebutuhan)
 * **Database:** Elasticsearch
-* **Lainnya:** `python-dotenv` (untuk variabel lingkungan)
+* **Lainnya:** `python-dotenv` (untuk environment variables)
 
 ## Struktur Proyek
 ```

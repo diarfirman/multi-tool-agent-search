@@ -5,10 +5,3 @@ langchain
 langchain-openai # Direkomendasikan untuk integrasi OpenAI
 elasticsearch
 python-dotenv
-
-# Dependensi OpenTelemetry untuk Elastic
-opentelemetry-distro[otlp] # Distribusi Elastic dengan OTLP exporter
-opentelemetry-instrumentation-flask # Untuk instrumentasi otomatis Flask
-opentelemetry-instrumentation-elasticsearch # Untuk instrumentasi otomatis Elasticsearch client
-opentelemetry-instrumentation-openai # Opsional: jika ingin instrumentasi spesifik OpenAI
-opentelemetry-instrumentation-langchain # Opsional: jika ingin instrumentasi spesifik Langchain (cek ketersediaan/kompatibilitas)
